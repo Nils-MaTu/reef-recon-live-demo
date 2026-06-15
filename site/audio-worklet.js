@@ -1,4 +1,4 @@
-import { DEMO_CONFIG } from "./config.js";
+import { DEMO_CONFIG } from "./config.js?v=20260615-1";
 
 const EPSILON = 1e-12;
 const FFT_SIZE = 512;

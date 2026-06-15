@@ -9,27 +9,27 @@ export const DEMO_CONFIG = {
   params: [
     {
       id: "high_suppression_db",
-      label: "High band suppression",
+      label: "Snapping Shrimp Suppression",
       unit: "dB",
       levels: { low: 0, med: 14, high: 36 },
     },
     {
       id: "low_suppression_db",
-      label: "Low band suppression",
+      label: "Low Frequency Suppression",
       unit: "dB",
       levels: { low: 0, med: 10, high: 36 },
     },
     {
       id: "transient_threshold_db",
-      label: "Transient threshold",
+      label: "Transient Detection Sensitivity",
       unit: "dB",
-      levels: { low: 3, med: 4.5, high: 6 },
+      levels: { low: 6, med: 4.5, high: 3 },
     },
     {
       id: "harmonic_threshold_db",
-      label: "Harmonic threshold",
+      label: "Harmonic Detection Sensitivity",
       unit: "dB",
-      levels: { low: 9, med: 12, high: 14 },
+      levels: { low: 14, med: 12, high: 9 },
     },
   ],
   defaultLevels: {

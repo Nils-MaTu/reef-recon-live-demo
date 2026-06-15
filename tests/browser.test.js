@@ -61,6 +61,33 @@ test(
       );
       assert.equal(await page.locator(".switch-control").count(), 4);
       assert.equal(await page.locator("#powerButton").isEnabled(), true);
+      assert.deepEqual(
+        await page.locator(".switch-control legend").allTextContents(),
+        [
+          "Snapping Shrimp Suppression",
+          "Low Frequency Suppression",
+          "Transient Detection Sensitivity",
+          "Harmonic Detection Sensitivity",
+        ],
+      );
+      await page.locator('label[for="transient_threshold_db-high"]').click();
+      assert.equal(
+        await page
+          .locator(".switch-control")
+          .filter({ hasText: "Transient Detection Sensitivity" })
+          .locator(".readout")
+          .textContent(),
+        "3.0 dB",
+      );
+      await page.locator('label[for="harmonic_threshold_db-low"]').click();
+      assert.equal(
+        await page
+          .locator(".switch-control")
+          .filter({ hasText: "Harmonic Detection Sensitivity" })
+          .locator(".readout")
+          .textContent(),
+        "14.0 dB",
+      );
 
       await page.locator("#powerButton").click();
       await page.waitForTimeout(400);
@@ -161,7 +188,7 @@ test(
       await page.locator("#bypassButton").click();
       assert.equal(
         await page.locator("#bypassButton").textContent(),
-        "Level matched",
+        "Bypassed",
       );
       assert.equal(
         await page.locator("#bypassButton").getAttribute("aria-pressed"),
