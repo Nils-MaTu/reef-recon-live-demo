@@ -9,7 +9,7 @@
     />
     <title>Reef Recon Live DSP Demo</title>
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=8a70440-2" />
   </head>
   <body>
     <main class="app-shell">
@@ -58,10 +58,14 @@
               <span id="meterReadout">L 0.0 H 0.0</span>
             </div>
           </div>
-          <div id="processedSpectrogramStage" class="spectrogram-stage">
+          <div id="waveformStage" class="spectrogram-stage">
             <canvas id="processedSpectrogram"></canvas>
-            <div class="loop-overlay spectrogram-loop-overlay" aria-label="Loop range">
-              <div class="loop-selection"></div>
+            <div
+              id="loopOverlay"
+              class="loop-overlay spectrogram-loop-overlay"
+              aria-label="Loop range"
+            >
+              <div id="loopSelection" class="loop-selection"></div>
               <button
                 id="loopStartHandle"
                 class="loop-handle loop-handle-start"
@@ -133,6 +137,6 @@
       </aside>
     </main>
 
-    <script type="module" src="./app.js"></script>
+    <script type="module" src="./app.js?v=8a70440-2"></script>
   </body>
 </html>

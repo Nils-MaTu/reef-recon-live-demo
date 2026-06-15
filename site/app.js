@@ -232,10 +232,10 @@ class AudioEngine {
     if (!this.context) {
       this.context = new AudioContext({ sampleRate: DEMO_CONFIG.sampleRate });
       await this.context.audioWorklet.addModule(
-        new URL("./audio-worklet.js", import.meta.url),
+        new URL("./audio-worklet.js?v=8a70440-2", import.meta.url),
       );
       const wasmResponse = await fetch(
-        new URL("./dsp-core.wasm", import.meta.url),
+        new URL("./dsp-core.wasm?v=8a70440-2", import.meta.url),
       );
       if (!wasmResponse.ok) {
         throw new Error(`Could not load WebAssembly core (${wasmResponse.status})`);
@@ -898,8 +898,12 @@ class LoopRangeControl {
 
 const engine = new AudioEngine(selectedParameters());
 const waveform = new WaveformScope(document.querySelector("#waveformCanvas"));
+let loopStages = Array.from(document.querySelectorAll(".spectrogram-stage"));
+if (loopStages.length === 0 && document.querySelector("#waveformStage")) {
+  loopStages = [document.querySelector("#waveformStage")];
+}
 const loopRange = new LoopRangeControl(
-  Array.from(document.querySelectorAll(".spectrogram-stage")).map((stage) => {
+  loopStages.map((stage) => {
     const overlay = stage.querySelector(".loop-overlay");
     return {
       stage,

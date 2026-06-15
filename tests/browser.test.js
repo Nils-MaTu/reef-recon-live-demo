@@ -87,14 +87,14 @@ test(
       );
 
       const stage = await page
-        .locator("#processedSpectrogramStage .loop-overlay")
+        .locator("#waveformStage .loop-overlay")
         .boundingBox();
       assert.ok(stage);
       const startHandle = page.locator("#loopStartHandle");
       const endHandle = page.locator("#loopEndHandle");
       assert.doesNotMatch(
         await page
-          .locator("#processedSpectrogramStage .loop-overlay")
+          .locator("#waveformStage .loop-overlay")
           .getAttribute("class"),
         /is-active/,
       );
@@ -116,7 +116,7 @@ test(
       );
       assert.match(
         await page
-          .locator("#processedSpectrogramStage .loop-overlay")
+          .locator("#waveformStage .loop-overlay")
           .getAttribute("class"),
         /is-active/,
       );
