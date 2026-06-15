@@ -3,10 +3,6 @@ import { DEMO_CONFIG } from "./config.js";
 const EPSILON = 1e-12;
 const FFT_SIZE = 512;
 const IDENTITY = [1, 0, 0, 0, 0];
-let sourceSamples = null;
-let sourceSampleRate = DEMO_CONFIG.sampleRate;
-let latestRequest = 0;
-let kernelPromise = null;
 
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
@@ -241,15 +237,14 @@ class WasmKernel {
   }
 }
 
-async function createKernel(sampleRate) {
-  const wasmUrl = new URL("./dsp-core.wasm", self.location.href);
-  const response = await fetch(wasmUrl);
-  if (!response.ok) {
-    throw new Error(`Could not load WebAssembly core (${response.status})`);
-  }
-  const bytes = await response.arrayBuffer();
-  const { instance } = await WebAssembly.instantiate(bytes, {
-    env: { abort: () => { throw new Error("WebAssembly aborted"); } },
+function createKernel(sampleRate, wasmBytes) {
+  const module = new WebAssembly.Module(wasmBytes);
+  const instance = new WebAssembly.Instance(module, {
+    env: {
+      abort() {
+        throw new Error("WebAssembly aborted");
+      },
+    },
   });
   return new WasmKernel(instance, sampleRate);
 }
@@ -435,300 +430,330 @@ function fillGainRamps(target, starts, ends, bandCount, count) {
   }
 }
 
-async function processSource(requestId, parameters) {
-  if (!sourceSamples) {
-    throw new Error("No source audio is loaded");
+class ReefReconProcessor extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    const wasmBytes = options.processorOptions.wasmBytes;
+    this.parameters = { ...options.processorOptions.parameters };
+    this.kernel = createKernel(sampleRate, wasmBytes);
+    this.blockSize = DEMO_CONFIG.blockSize;
+    this.frameRate = sampleRate / this.blockSize;
+    this.suppressedGain = dbToGain(DEMO_CONFIG.suppressedGainDb);
+    this.ceiling = dbToGain(DEMO_CONFIG.limiterCeilingDbfs);
+    this.inputBlock = new Float32Array(this.blockSize);
+    this.outputBlock = new Float32Array(this.blockSize);
+    this.inputOffset = 0;
+    this.outputOffset = 0;
+    this.acousticGains = new Float32Array(3 * this.blockSize);
+    this.structuredGains = new Float32Array(4 * this.blockSize);
+    this.detectorWindow = new Float32Array(FFT_SIZE);
+    this.controlled = new Float32Array(this.blockSize);
+    this.agcBlock = new Float32Array(this.blockSize);
+    this.previousAcoustic = new Float32Array(3);
+    this.currentAcoustic = new Float32Array(3);
+    this.previousStructured = new Float32Array(4);
+    this.currentStructured = new Float32Array(4);
+    this.acousticShort = new Float64Array(3);
+    this.acousticLong = new Float64Array(3);
+    this.lowCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
+    this.highCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
+    this.lowSidechainGain = 1;
+    this.highSidechainGain = 1;
+    this.agcGain = 1;
+    this.limiterGain = 1;
+    this.detectorInitialized = false;
+    this.blockCounter = 0;
+    this.reset();
+
+    this.port.onmessage = (event) => {
+      const message = event.data;
+      if (message.type === "parameters") {
+        this.parameters = { ...this.parameters, ...message.parameters };
+        this.port.postMessage({
+          type: "parameters-applied",
+          version: message.version,
+        });
+      } else if (message.type === "reset") {
+        this.reset();
+      }
+    };
+    this.port.postMessage({ type: "ready" });
   }
-  const kernel = await kernelPromise;
-  kernel.resetState();
-  const sampleRate = sourceSampleRate;
-  const blockSize = DEMO_CONFIG.blockSize;
-  const frameRate = sampleRate / blockSize;
-  const output = new Float32Array(sourceSamples.length);
-  const frameCount = Math.ceil(sourceSamples.length / blockSize);
-  const lowGainDb = new Float32Array(frameCount);
-  const highGainDb = new Float32Array(frameCount);
-  const flags = new Uint8Array(frameCount);
-  const suppressedGain = dbToGain(DEMO_CONFIG.suppressedGainDb);
-  const ceiling = dbToGain(DEMO_CONFIG.limiterCeilingDbfs);
-  const acousticGains = new Float32Array(3 * blockSize);
-  const structuredGains = new Float32Array(4 * blockSize);
-  const detectorWindow = new Float32Array(FFT_SIZE);
-  const controlled = new Float32Array(blockSize);
-  const agcBlock = new Float32Array(blockSize);
-  const previousAcoustic = new Float32Array(3).fill(suppressedGain);
-  const currentAcoustic = new Float32Array(3).fill(suppressedGain);
-  const previousStructured = new Float32Array(4);
-  const currentStructured = new Float32Array(4);
-  const acousticShort = new Float64Array(3);
-  const acousticLong = new Float64Array(3);
-  const lowCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
-  const highCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
-  let lowSidechainGain = 1;
-  let highSidechainGain = 1;
-  let agcGain = 1;
-  let limiterGain = 1;
-  let detectorInitialized = false;
 
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    if (requestId !== latestRequest) {
-      return null;
-    }
-    const offset = frame * blockSize;
-    const count = Math.min(blockSize, sourceSamples.length - offset);
-    const input = sourceSamples.subarray(offset, offset + count);
+  reset() {
+    this.kernel.resetState();
+    this.inputBlock.fill(0);
+    this.outputBlock.fill(0);
+    this.inputOffset = 0;
+    this.outputOffset = 0;
+    this.detectorWindow.fill(0);
+    this.previousAcoustic.fill(this.suppressedGain);
+    this.currentAcoustic.fill(this.suppressedGain);
+    this.previousStructured.fill(0);
+    this.currentStructured.fill(0);
+    this.acousticShort.fill(0);
+    this.acousticLong.fill(0);
+    this.lowCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
+    this.highCompressor = { shortEnergy: 0, longEnergy: 0, gain: 1 };
+    this.lowSidechainGain = 1;
+    this.highSidechainGain = 1;
+    this.agcGain = 1;
+    this.limiterGain = 1;
+    this.detectorInitialized = false;
+    this.blockCounter = 0;
+  }
 
-    const whitenedOutput = kernel.processBank(input, count, kernel.whitening);
-    const whitened = kernel.band(whitenedOutput, 0, count);
-    const agcDetectorOutput = kernel.processBank(whitened, count, kernel.agc);
-    const agcDetector = kernel.band(agcDetectorOutput, 0, count);
+  processBlock(input) {
+    const count = this.blockSize;
+    const parameters = this.parameters;
+    const whitenedOutput = this.kernel.processBank(
+      input,
+      count,
+      this.kernel.whitening,
+    );
+    const whitened = this.kernel.band(whitenedOutput, 0, count);
+    const agcDetectorOutput = this.kernel.processBank(
+      whitened,
+      count,
+      this.kernel.agc,
+    );
+    const agcDetector = this.kernel.band(agcDetectorOutput, 0, count);
     const peak = peakAbsolute(agcDetector, count);
     const agcTarget =
-      peak > EPSILON ? clamp(dbToGain(-6) / peak, 0.05, 16) : agcGain;
+      peak > EPSILON ? clamp(dbToGain(-6) / peak, 0.05, 16) : this.agcGain;
     const nextAgcGain = smoothGain(
-      agcGain,
+      this.agcGain,
       agcTarget,
-      alphaForMs(5, frameRate),
-      alphaForMs(30000, frameRate),
+      alphaForMs(5, this.frameRate),
+      alphaForMs(30000, this.frameRate),
     );
     for (let sample = 0; sample < count; sample += 1) {
-      const mix = sample / Math.max(count - 1, 1);
-      agcBlock[sample] =
-        whitened[sample] * (agcGain + (nextAgcGain - agcGain) * mix);
+      const mix = sample / (count - 1);
+      this.agcBlock[sample] =
+        whitened[sample] *
+        (this.agcGain + (nextAgcGain - this.agcGain) * mix);
     }
-    agcGain = nextAgcGain;
+    this.agcGain = nextAgcGain;
 
-    const splitOutput = kernel.processBank(agcBlock, count, kernel.split);
-    const low = kernel.band(splitOutput, 0, count);
-    const mid = kernel.band(splitOutput, 1, count);
-    const high = kernel.band(splitOutput, 2, count);
-
+    const splitOutput = this.kernel.processBank(
+      this.agcBlock,
+      count,
+      this.kernel.split,
+    );
+    const low = this.kernel.band(splitOutput, 0, count);
+    const mid = this.kernel.band(splitOutput, 1, count);
+    const high = this.kernel.band(splitOutput, 2, count);
     const lowDelta = parameters.low_suppression_db - 10;
     const highDelta = parameters.high_suppression_db - 14;
-    updateEnergyCompressor(lowCompressor, low, count, frameRate, {
-      shortMs: 10,
-      longMs: 250,
-      thresholdDb: clamp(6 - lowDelta * 0.3, -12, 18),
-      ratio: clamp(4 * 2 ** (lowDelta / 12), 1, 40),
-      attackMs: 5,
-      releaseMs: 200,
-    });
-    updateEnergyCompressor(highCompressor, high, count, frameRate, {
-      shortMs: 10,
-      longMs: 250,
-      thresholdDb: clamp(6 - highDelta * 0.3, -12, 18),
-      ratio: clamp(4 * 2 ** (highDelta / 12), 1, 40),
-      attackMs: 2,
-      releaseMs: 200,
-    });
+    updateEnergyCompressor(
+      this.lowCompressor,
+      low,
+      count,
+      this.frameRate,
+      {
+        shortMs: 10,
+        longMs: 250,
+        thresholdDb: clamp(6 - lowDelta * 0.3, -12, 18),
+        ratio: clamp(4 * 2 ** (lowDelta / 12), 1, 40),
+        attackMs: 5,
+        releaseMs: 200,
+      },
+    );
+    updateEnergyCompressor(
+      this.highCompressor,
+      high,
+      count,
+      this.frameRate,
+      {
+        shortMs: 10,
+        longMs: 250,
+        thresholdDb: clamp(6 - highDelta * 0.3, -12, 18),
+        ratio: clamp(4 * 2 ** (highDelta / 12), 1, 40),
+        attackMs: 2,
+        releaseMs: 200,
+      },
+    );
 
     const midRms = Math.sqrt(meanSquare(mid, count) + EPSILON);
     const threshold = midRms * dbToGain(-24);
-    lowSidechainGain = smoothGain(
-      lowSidechainGain,
+    this.lowSidechainGain = smoothGain(
+      this.lowSidechainGain,
       compressorGain(
         Math.sqrt(meanSquare(low, count) + EPSILON),
         threshold,
         8,
       ),
-      alphaForMs(2000, frameRate),
-      alphaForMs(2000, frameRate),
+      alphaForMs(2000, this.frameRate),
+      alphaForMs(2000, this.frameRate),
     );
-    highSidechainGain = smoothGain(
-      highSidechainGain,
+    this.highSidechainGain = smoothGain(
+      this.highSidechainGain,
       compressorGain(
         Math.sqrt(meanSquare(high, count) + EPSILON),
         threshold,
         8,
       ),
-      alphaForMs(2000, frameRate),
-      alphaForMs(2000, frameRate),
+      alphaForMs(2000, this.frameRate),
+      alphaForMs(2000, this.frameRate),
     );
     const effectiveLow = applySuppressionMapping(
-      lowCompressor.gain * lowSidechainGain,
+      this.lowCompressor.gain * this.lowSidechainGain,
       parameters.low_suppression_db,
       10,
     );
     const effectiveHigh = applySuppressionMapping(
-      highCompressor.gain * highSidechainGain,
+      this.highCompressor.gain * this.highSidechainGain,
       parameters.high_suppression_db,
       14,
     );
-    lowGainDb[frame] = gainToDb(effectiveLow);
-    highGainDb[frame] = gainToDb(effectiveHigh);
-
     for (let sample = 0; sample < count; sample += 1) {
-      controlled[sample] =
-        low[sample] * effectiveLow + mid[sample] + high[sample] * effectiveHigh;
+      this.controlled[sample] =
+        low[sample] * effectiveLow +
+        mid[sample] +
+        high[sample] * effectiveHigh;
     }
 
-    const acousticOutput = kernel.processBank(
-      controlled,
+    const acousticOutput = this.kernel.processBank(
+      this.controlled,
       count,
-      kernel.acoustic,
+      this.kernel.acoustic,
     );
-    kernel.processBank(controlled, count, kernel.structured);
+    this.kernel.processBank(this.controlled, count, this.kernel.structured);
     let transientFlag = false;
-    previousAcoustic.set(currentAcoustic);
-
+    this.previousAcoustic.set(this.currentAcoustic);
     for (let band = 0; band < 3; band += 1) {
-      const bandValues = kernel.band(acousticOutput, band, count);
+      const bandValues = this.kernel.band(acousticOutput, band, count);
       const energy = meanSquare(bandValues, count) + EPSILON;
-      if (!detectorInitialized) {
-        acousticShort[band] = energy;
-        acousticLong[band] = energy;
+      if (!this.detectorInitialized) {
+        this.acousticShort[band] = energy;
+        this.acousticLong[band] = energy;
       } else {
-        const shortAlpha = alphaForMs(30, frameRate);
-        const longAlpha = alphaForMs(250, frameRate);
-        acousticShort[band] =
-          shortAlpha * acousticShort[band] + (1 - shortAlpha) * energy;
-        acousticLong[band] =
-          longAlpha * acousticLong[band] + (1 - longAlpha) * energy;
+        const shortAlpha = alphaForMs(30, this.frameRate);
+        const longAlpha = alphaForMs(250, this.frameRate);
+        this.acousticShort[band] =
+          shortAlpha * this.acousticShort[band] + (1 - shortAlpha) * energy;
+        this.acousticLong[band] =
+          longAlpha * this.acousticLong[band] + (1 - longAlpha) * energy;
       }
-      const score = detectorInitialized
+      const score = this.detectorInitialized
         ? Math.max(
             0,
             10 *
               Math.log10(
-                (acousticShort[band] + EPSILON) /
-                  (acousticLong[band] + EPSILON),
+                (this.acousticShort[band] + EPSILON) /
+                  (this.acousticLong[band] + EPSILON),
               ),
           )
         : 0;
       const active = score >= parameters.transient_threshold_db;
       transientFlag ||= active;
-      const target = active ? 1 : suppressedGain;
-      currentAcoustic[band] = smoothGain(
-        currentAcoustic[band],
-        target,
-        alphaForMs(5, frameRate),
-        alphaForMs(100, frameRate),
+      this.currentAcoustic[band] = smoothGain(
+        this.currentAcoustic[band],
+        active ? 1 : this.suppressedGain,
+        alphaForMs(5, this.frameRate),
+        alphaForMs(100, this.frameRate),
       );
     }
-    detectorInitialized = true;
+    this.detectorInitialized = true;
 
-    pushDetectorWindow(detectorWindow, controlled, count);
+    pushDetectorWindow(this.detectorWindow, this.controlled, count);
     const structured = structuredDetection(
-      detectorWindow,
+      this.detectorWindow,
       sampleRate,
       parameters.harmonic_threshold_db,
     );
-    previousStructured.set(currentStructured);
+    this.previousStructured.set(this.currentStructured);
     for (let band = 0; band < 4; band += 1) {
-      currentStructured[band] = smoothGain(
-        currentStructured[band],
+      this.currentStructured[band] = smoothGain(
+        this.currentStructured[band],
         structured.gains[band],
-        alphaForMs(10, frameRate),
-        alphaForMs(200, frameRate),
+        alphaForMs(10, this.frameRate),
+        alphaForMs(200, this.frameRate),
       );
     }
-    flags[frame] = (transientFlag ? 1 : 0) | (structured.flag ? 2 : 0);
     fillGainRamps(
-      acousticGains,
-      previousAcoustic,
-      currentAcoustic,
+      this.acousticGains,
+      this.previousAcoustic,
+      this.currentAcoustic,
       3,
       count,
     );
     fillGainRamps(
-      structuredGains,
-      previousStructured,
-      currentStructured,
+      this.structuredGains,
+      this.previousStructured,
+      this.currentStructured,
       4,
       count,
     );
 
-    const rendered = kernel.render(
-      controlled,
-      acousticGains.subarray(0, 3 * count),
-      structuredGains.subarray(0, 4 * count),
+    const rendered = this.kernel.render(
+      this.controlled,
+      this.acousticGains,
+      this.structuredGains,
       count,
-      suppressedGain,
+      this.suppressedGain,
     );
-    const renderPeak = peakAbsolute(rendered, count);
     const limiterTarget = Math.min(
       1,
-      ceiling / Math.max(renderPeak, EPSILON),
+      this.ceiling / Math.max(peakAbsolute(rendered, count), EPSILON),
     );
     const nextLimiterGain =
-      limiterTarget < limiterGain
+      limiterTarget < this.limiterGain
         ? limiterTarget
-        : alphaForMs(50, frameRate) * limiterGain +
-          (1 - alphaForMs(50, frameRate));
-    const limited = kernel.limit(
+        : alphaForMs(50, this.frameRate) * this.limiterGain +
+          (1 - alphaForMs(50, this.frameRate));
+    const limited = this.kernel.limit(
       rendered,
       count,
-      limiterGain,
+      this.limiterGain,
       nextLimiterGain,
-      ceiling,
+      this.ceiling,
     );
-    output.set(limited.subarray(0, count), offset);
-    limiterGain = nextLimiterGain;
+    this.outputBlock.set(limited);
+    this.limiterGain = nextLimiterGain;
+    this.blockCounter += 1;
 
-    if (frame % 96 === 0 || frame === frameCount - 1) {
-      self.postMessage({
-        type: "progress",
-        requestId,
-        progress: (frame + 1) / frameCount,
+    if (this.blockCounter % 8 === 0) {
+      this.port.postMessage({
+        type: "meter",
+        lowGainDb: gainToDb(effectiveLow),
+        highGainDb: gainToDb(effectiveHigh),
+        transient: transientFlag,
+        harmonic: structured.flag,
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
 
-  return {
-    output,
-    lowGainDb,
-    highGainDb,
-    flags,
-    meterInterval: blockSize / sampleRate,
-    peak: peakAbsolute(output),
-    rms: Math.sqrt(meanSquare(output) + EPSILON),
-  };
+  process(inputs, outputs) {
+    const input = inputs[0]?.[0];
+    const output = outputs[0]?.[0];
+    if (!output) {
+      return true;
+    }
+    const quantum = output.length;
+    output.set(
+      this.outputBlock.subarray(
+        this.outputOffset,
+        this.outputOffset + quantum,
+      ),
+    );
+    this.outputOffset += quantum;
+    if (this.outputOffset >= this.blockSize) {
+      this.outputOffset = 0;
+    }
+
+    if (input) {
+      this.inputBlock.set(input, this.inputOffset);
+    } else {
+      this.inputBlock.fill(0, this.inputOffset, this.inputOffset + quantum);
+    }
+    this.inputOffset += quantum;
+    if (this.inputOffset >= this.blockSize) {
+      this.inputOffset = 0;
+      this.processBlock(this.inputBlock);
+    }
+    return true;
+  }
 }
 
-self.addEventListener("message", async (event) => {
-  const message = event.data;
-  if (message.type === "load") {
-    sourceSamples = new Float32Array(message.samples);
-    sourceSampleRate = message.sampleRate;
-    latestRequest = message.requestId;
-    kernelPromise = createKernel(sourceSampleRate);
-  } else if (message.type === "process") {
-    latestRequest = message.requestId;
-  } else {
-    return;
-  }
-
-  try {
-    const result = await processSource(message.requestId, message.parameters);
-    if (!result || message.requestId !== latestRequest) {
-      return;
-    }
-    self.postMessage(
-      {
-        type: "result",
-        requestId: message.requestId,
-        sampleRate: sourceSampleRate,
-        processed: result.output.buffer,
-        lowGainDb: result.lowGainDb.buffer,
-        highGainDb: result.highGainDb.buffer,
-        flags: result.flags.buffer,
-        meterInterval: result.meterInterval,
-        peak: result.peak,
-        rms: result.rms,
-      },
-      [
-        result.output.buffer,
-        result.lowGainDb.buffer,
-        result.highGainDb.buffer,
-        result.flags.buffer,
-      ],
-    );
-  } catch (error) {
-    self.postMessage({
-      type: "error",
-      requestId: message.requestId,
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-});
+registerProcessor("reef-recon-processor", ReefReconProcessor);

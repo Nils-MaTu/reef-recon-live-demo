@@ -23,10 +23,9 @@ const state = {
   sourceLabel: "",
   sourceData: null,
   uploadedFile: null,
-  meterTimeline: null,
+  meter: null,
   bypass: false,
   lastVisualTime: 0,
-  processingTimer: 0,
   loadVersion: 0,
 };
 
@@ -174,103 +173,21 @@ class SwitchControl {
   }
 }
 
-class MeterTimeline {
-  constructor(data) {
-    this.lowGainDb = new Float32Array(data.lowGainDb);
-    this.highGainDb = new Float32Array(data.highGainDb);
-    this.flags = new Uint8Array(data.flags);
-    this.interval = data.meterInterval;
-  }
-
-  at(time) {
-    const index = clamp(
-      Math.floor(time / this.interval),
-      0,
-      this.flags.length - 1,
-    );
-    return {
-      lowGainDb: this.lowGainDb[index],
-      highGainDb: this.highGainDb[index],
-      transient: Boolean(this.flags[index] & 1),
-      harmonic: Boolean(this.flags[index] & 2),
-    };
-  }
-}
-
-class ProcessorClient {
-  constructor() {
-    this.worker = new Worker(
-      new URL("./processor-worker.js", import.meta.url),
-      { type: "module" },
-    );
-    this.requestId = 0;
-    this.pending = null;
-    this.hasSource = false;
-    this.worker.addEventListener("message", (event) => this.handle(event.data));
-  }
-
-  handle(message) {
-    if (!this.pending || message.requestId !== this.pending.requestId) {
-      return;
-    }
-    if (message.type === "progress") {
-      this.pending.onProgress(message.progress);
-    } else if (message.type === "result") {
-      const { resolve } = this.pending;
-      this.pending = null;
-      resolve(message);
-    } else if (message.type === "error") {
-      const { reject } = this.pending;
-      this.pending = null;
-      reject(new Error(message.message));
-    }
-  }
-
-  cancelPending() {
-    if (this.pending) {
-      this.pending.reject(new DOMException("Superseded", "AbortError"));
-      this.pending = null;
-    }
-  }
-
-  process(samples, parameters, onProgress, loadSource) {
-    this.cancelPending();
-    const requestId = ++this.requestId;
-    const promise = new Promise((resolve, reject) => {
-      this.pending = { requestId, resolve, reject, onProgress };
-    });
-    if (loadSource || !this.hasSource) {
-      const workerCopy = samples.slice();
-      this.worker.postMessage(
-        {
-          type: "load",
-          requestId,
-          samples: workerCopy.buffer,
-          sampleRate: DEMO_CONFIG.sampleRate,
-          parameters,
-        },
-        [workerCopy.buffer],
-      );
-      this.hasSource = true;
-    } else {
-      this.worker.postMessage({ type: "process", requestId, parameters });
-    }
-    return promise;
-  }
-}
-
 class AudioEngine {
-  constructor() {
+  constructor(parameters) {
     this.context = null;
     this.nodes = null;
     this.originalBuffer = null;
-    this.processedBuffer = null;
     this.originalSource = null;
-    this.processedDeck = null;
+    this.worklet = null;
+    this.parameters = { ...parameters };
+    this.parameterVersion = 0;
     this.playing = false;
     this.bypass = false;
     this.offset = 0;
     this.startedAt = 0;
+    this.onMeter = () => {};
+    this.onParametersApplied = () => {};
   }
 
   get duration() {
@@ -299,12 +216,36 @@ class AudioEngine {
   async ensureContext(resume = true) {
     if (!this.context) {
       this.context = new AudioContext({ sampleRate: DEMO_CONFIG.sampleRate });
+      await this.context.audioWorklet.addModule(
+        new URL("./audio-worklet.js", import.meta.url),
+      );
+      const wasmResponse = await fetch(
+        new URL("./dsp-core.wasm", import.meta.url),
+      );
+      if (!wasmResponse.ok) {
+        throw new Error(`Could not load WebAssembly core (${wasmResponse.status})`);
+      }
+      const wasmBytes = await wasmResponse.arrayBuffer();
       const originalAnalyser = this.context.createAnalyser();
       const processedAnalyser = this.context.createAnalyser();
       const originalGain = this.context.createGain();
       const processedGain = this.context.createGain();
+      const dryDelay = this.context.createDelay(1);
       const monitorAnalyser = this.context.createAnalyser();
       const outputGain = this.context.createGain();
+      this.worklet = new AudioWorkletNode(
+        this.context,
+        "reef-recon-processor",
+        {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [1],
+          processorOptions: {
+            wasmBytes,
+            parameters: this.parameters,
+          },
+        },
+      );
 
       for (const analyser of [
         originalAnalyser,
@@ -317,20 +258,35 @@ class AudioEngine {
         analyser.smoothingTimeConstant = 0.22;
       }
 
-      originalAnalyser.connect(originalGain);
+      originalAnalyser.connect(dryDelay);
+      dryDelay.connect(originalGain);
       originalGain.connect(monitorAnalyser);
+      this.worklet.connect(processedAnalyser);
       processedAnalyser.connect(processedGain);
       processedGain.connect(monitorAnalyser);
       monitorAnalyser.connect(outputGain);
       outputGain.connect(this.context.destination);
-      originalGain.gain.value = this.bypass ? 1 : 0;
+      dryDelay.delayTime.value =
+        DEMO_CONFIG.blockSize / DEMO_CONFIG.sampleRate;
+      originalGain.gain.value = this.bypass
+        ? dbToGain(DEMO_CONFIG.suppressedGainDb)
+        : 0;
       processedGain.gain.value = this.bypass ? 0 : 1;
       outputGain.gain.value = dbToGain(DEMO_CONFIG.outputGainDb);
+      this.worklet.port.onmessage = (event) => {
+        const message = event.data;
+        if (message.type === "meter") {
+          this.onMeter(message);
+        } else if (message.type === "parameters-applied") {
+          this.onParametersApplied(message.version);
+        }
+      };
       this.nodes = {
         originalAnalyser,
         processedAnalyser,
         originalGain,
         processedGain,
+        dryDelay,
         monitorAnalyser,
         outputGain,
       };
@@ -361,19 +317,13 @@ class AudioEngine {
     }
   }
 
-  createLoopingSource(buffer, destination, gainValue = null) {
+  createLoopingSource(buffer) {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
-    if (gainValue === null) {
-      source.connect(destination);
-      return { source, gain: null };
-    }
-    const gain = this.context.createGain();
-    gain.gain.value = gainValue;
-    source.connect(gain);
-    gain.connect(destination);
-    return { source, gain };
+    source.connect(this.nodes.originalAnalyser);
+    source.connect(this.worklet);
+    return source;
   }
 
   async decode(arrayBuffer) {
@@ -400,67 +350,37 @@ class AudioEngine {
     await this.ensureContext(false);
     this.stop();
     this.originalBuffer = this.createBuffer(originalSamples);
-    this.processedBuffer = null;
     this.offset = 0;
   }
 
-  setProcessed(processedSamples) {
-    this.processedBuffer = this.createBuffer(processedSamples);
-    if (!this.playing) {
-      return;
-    }
-
-    const time = this.currentTime;
-    const nextDeck = this.createLoopingSource(
-      this.processedBuffer,
-      this.nodes.processedAnalyser,
-      0,
-    );
-    nextDeck.source.start(0, time);
-    const now = this.context.currentTime;
-    const fade = DEMO_CONFIG.crossfadeMs / 1000;
-    nextDeck.gain.gain.linearRampToValueAtTime(1, now + fade);
-    const previousDeck = this.processedDeck;
-    if (previousDeck) {
-      previousDeck.gain.gain.cancelScheduledValues(now);
-      previousDeck.gain.gain.setValueAtTime(previousDeck.gain.gain.value, now);
-      previousDeck.gain.gain.linearRampToValueAtTime(0, now + fade);
-      window.setTimeout(
-        () => this.stopSource(previousDeck.source),
-        DEMO_CONFIG.crossfadeMs + 40,
-      );
-    }
-    this.processedDeck = nextDeck;
+  setParameters(parameters) {
+    this.parameters = { ...parameters };
+    this.parameterVersion += 1;
+    this.worklet?.port.postMessage({
+      type: "parameters",
+      version: this.parameterVersion,
+      parameters: this.parameters,
+    });
+    return this.parameterVersion;
   }
 
   async play() {
-    if (!this.originalBuffer || !this.processedBuffer) {
+    if (!this.originalBuffer) {
       return;
     }
     await this.ensureContext();
     const time = this.offset % this.duration;
-    const original = this.createLoopingSource(
-      this.originalBuffer,
-      this.nodes.originalAnalyser,
-    );
-    const processed = this.createLoopingSource(
-      this.processedBuffer,
-      this.nodes.processedAnalyser,
-      1,
-    );
-    original.source.start(0, time);
-    processed.source.start(0, time);
-    this.originalSource = original.source;
-    this.processedDeck = processed;
+    this.worklet.port.postMessage({ type: "reset" });
+    this.originalSource = this.createLoopingSource(this.originalBuffer);
+    this.originalSource.start(0, time);
     this.startedAt = this.context.currentTime;
     this.playing = true;
   }
 
   stop() {
     this.stopSource(this.originalSource);
-    this.stopSource(this.processedDeck?.source);
     this.originalSource = null;
-    this.processedDeck = null;
+    this.worklet?.port.postMessage({ type: "reset" });
     this.playing = false;
     this.offset = 0;
   }
@@ -482,7 +402,11 @@ class AudioEngine {
     if (!this.context) {
       return;
     }
-    this.holdAndRamp(this.nodes.originalGain.gain, bypassed ? 1 : 0, 0.08);
+    this.holdAndRamp(
+      this.nodes.originalGain.gain,
+      bypassed ? dbToGain(DEMO_CONFIG.suppressedGainDb) : 0,
+      0.08,
+    );
     this.holdAndRamp(this.nodes.processedGain.gain, bypassed ? 0 : 1, 0.08);
   }
 }
@@ -788,8 +712,7 @@ class WaveformScope {
   }
 }
 
-const processor = new ProcessorClient();
-const engine = new AudioEngine();
+const engine = new AudioEngine(selectedParameters());
 const waveform = new WaveformScope(document.querySelector("#waveformCanvas"));
 const originalSpectrogram = new Spectrogram(
   document.querySelector("#originalSpectrogram"),
@@ -830,10 +753,8 @@ function buildControls() {
       state.levels[spec.id],
       (parameterId, level) => {
         state.levels[parameterId] = level;
-        window.clearTimeout(state.processingTimer);
-        state.processingTimer = window.setTimeout(() => {
-          processCurrentSource(false).catch(handleProcessingError);
-        }, 80);
+        const version = engine.setParameters(selectedParameters());
+        setStatus(`applying parameters (${version})`, 1);
       },
     );
     state.controls.set(spec.id, control);
@@ -859,7 +780,7 @@ function renderLoop() {
     resetVisuals();
   }
   state.lastVisualTime = time;
-  const meter = state.meterTimeline?.at(time) || null;
+  const meter = state.meter;
   originalSpectrogram.draw(engine.originalAnalyser, time);
   processedSpectrogram.draw(engine.processedAnalyser, time, meter);
   waveform.draw(engine.monitorAnalyser);
@@ -869,35 +790,8 @@ function renderLoop() {
 }
 
 function handleProcessingError(error) {
-  if (error?.name === "AbortError") {
-    return;
-  }
-  setStatus("processing failed");
+  setStatus("setup failed");
   console.error(error);
-}
-
-async function processCurrentSource(loadSource) {
-  if (!state.sourceData) {
-    return;
-  }
-  setStatus(`processing ${state.sourceLabel}`, 0.02);
-  if (!engine.processedBuffer) {
-    els.power.disabled = true;
-  }
-  const result = await processor.process(
-    state.sourceData,
-    selectedParameters(),
-    (progress) => setStatus(`processing ${state.sourceLabel}`, progress),
-    loadSource,
-  );
-  const processed = new Float32Array(result.processed);
-  engine.setProcessed(processed);
-  state.meterTimeline = new MeterTimeline(result);
-  els.power.disabled = false;
-  setStatus(
-    `ready ${state.sourceLabel} · peak ${(20 * Math.log10(Math.max(result.peak, 1e-8))).toFixed(1)} dBFS`,
-    1,
-  );
 }
 
 async function loadAudio(arrayBuffer, label) {
@@ -906,7 +800,7 @@ async function loadAudio(arrayBuffer, label) {
   els.power.classList.remove("is-live");
   els.power.textContent = "Play";
   els.power.disabled = true;
-  state.meterTimeline = null;
+  state.meter = null;
   setStatus(`decoding ${label}`, 0);
   const decoded = await engine.decode(arrayBuffer);
   if (version !== state.loadVersion) {
@@ -916,7 +810,9 @@ async function loadAudio(arrayBuffer, label) {
   state.sourceLabel = label;
   await engine.setSource(decoded);
   resetVisuals();
-  await processCurrentSource(true);
+  engine.setParameters(selectedParameters());
+  els.power.disabled = false;
+  setStatus(`ready ${state.sourceLabel} · live 256-sample DSP`, 1);
 }
 
 async function loadBundledSample(sampleId) {
@@ -956,7 +852,7 @@ els.bypass.addEventListener("click", () => {
   engine.setBypass(state.bypass);
   els.bypass.classList.toggle("is-bypassed", state.bypass);
   els.bypass.setAttribute("aria-pressed", String(state.bypass));
-  els.bypass.textContent = state.bypass ? "Bypassed" : "Processed";
+  els.bypass.textContent = state.bypass ? "Bypassed -20 dB" : "Processed";
   els.waveformTitle.textContent = state.bypass
     ? "Bypassed waveform"
     : "Processed waveform";
@@ -999,6 +895,19 @@ els.upload.addEventListener("change", async () => {
 });
 
 window.addEventListener("resize", resetVisuals);
+
+engine.onMeter = (meter) => {
+  state.meter = meter;
+};
+
+engine.onParametersApplied = () => {
+  setStatus(
+    engine.playing
+      ? `playing ${state.sourceLabel} · parameters live`
+      : `ready ${state.sourceLabel} · parameters live`,
+    1,
+  );
+};
 
 async function initialize() {
   buildFileSelect();

@@ -26,7 +26,7 @@ async function waitForServer(url) {
 }
 
 test(
-  "the live demo processes, updates, uploads, plays, and bypasses",
+  "the live demo streams blocks, updates instantly, uploads, and bypasses",
   { timeout: 120000 },
   async () => {
     const server = spawn(
@@ -62,22 +62,28 @@ test(
       assert.equal(await page.locator(".switch-control").count(), 4);
       assert.equal(await page.locator("#powerButton").isEnabled(), true);
 
+      await page.locator("#powerButton").click();
+      await page.waitForTimeout(400);
+      assert.match(
+        await page.locator("#powerButton").getAttribute("class"),
+        /is-live/,
+      );
+      assert.notEqual(await page.locator("#timeReadout").textContent(), "0.00s");
+
+      const changedAt = Date.now();
       await page.locator('label[for="high_suppression_db-high"]').click();
       await page.waitForFunction(
         () =>
           document
             .querySelector("#statusText")
-            ?.textContent.includes("processing"),
+            ?.textContent.includes("parameters live"),
         null,
-        { timeout: 10000 },
+        { timeout: 1000 },
       );
-      await page.waitForFunction(
-        () =>
-          document
-            .querySelector("#statusText")
-            ?.textContent.includes("ready Reef 1"),
-        null,
-        { timeout: 60000 },
+      assert.ok(Date.now() - changedAt < 1000);
+      assert.doesNotMatch(
+        await page.locator("#statusText").textContent(),
+        /processing/i,
       );
 
       await page.locator("#uploadInput").setInputFiles(
@@ -105,7 +111,10 @@ test(
       assert.notEqual(await page.locator("#timeReadout").textContent(), "0.00s");
 
       await page.locator("#bypassButton").click();
-      assert.equal(await page.locator("#bypassButton").textContent(), "Bypassed");
+      assert.equal(
+        await page.locator("#bypassButton").textContent(),
+        "Bypassed -20 dB",
+      );
       assert.equal(
         await page.locator("#bypassButton").getAttribute("aria-pressed"),
         "true",

@@ -6,12 +6,14 @@ the file to a server.
 
 ## What is implemented
 
-- 44.1 kHz mono browser processing in a Web Worker
+- 44.1 kHz mono streaming in an `AudioWorklet`
+- stateful 256-sample processing blocks, matching the C++ block size
 - WebAssembly biquad filter banks approximating the C++ fourth-order filters
 - spectral whitening, input AGC, low/mid/high level control
 - transient-band and structured-spectrum detection
 - detector-guided reconstruction and output limiting
-- synchronized original/processed playback with bypass and crossfades
+- parameter changes applied to the next DSP block without re-rendering
+- synchronized original/processed playback with a -20 dB bypass monitor
 - original and processed spectrograms plus a live waveform
 - the same four LOW/MED/HIGH parameters as the static demo
 
