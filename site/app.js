@@ -10,6 +10,12 @@ const els = {
   bypass: document.querySelector("#bypassButton"),
   file: document.querySelector("#fileSelect"),
   upload: document.querySelector("#uploadInput"),
+  loop: document.querySelector("#loopButton"),
+  loopOverlay: document.querySelector("#loopOverlay"),
+  loopSelection: document.querySelector("#loopSelection"),
+  loopStart: document.querySelector("#loopStartHandle"),
+  loopEnd: document.querySelector("#loopEndHandle"),
+  waveformStage: document.querySelector("#waveformStage"),
   controls: document.querySelector("#controlSurface"),
   time: document.querySelector("#timeReadout"),
   waveformTitle: document.querySelector("#waveformTitle"),
@@ -25,6 +31,9 @@ const state = {
   uploadedFile: null,
   meter: null,
   bypass: false,
+  loopActive: false,
+  loopStart: 0.15,
+  loopEnd: 0.85,
   lastVisualTime: 0,
   loadVersion: 0,
 };
@@ -184,6 +193,9 @@ class AudioEngine {
     this.parameterVersion = 0;
     this.playing = false;
     this.bypass = false;
+    this.loopEnabled = false;
+    this.loopStart = 0;
+    this.loopEnd = 1;
     this.offset = 0;
     this.startedAt = 0;
     this.onMeter = () => {};
@@ -198,7 +210,14 @@ class AudioEngine {
     if (!this.playing || !this.context) {
       return this.offset;
     }
-    return (this.offset + this.context.currentTime - this.startedAt) % this.duration;
+    const elapsed = this.context.currentTime - this.startedAt;
+    if (this.loopEnabled) {
+      const length = Math.max(0.01, this.loopEnd - this.loopStart);
+      const relative =
+        ((this.offset - this.loopStart + elapsed) % length + length) % length;
+      return this.loopStart + relative;
+    }
+    return (this.offset + elapsed) % this.duration;
   }
 
   get originalAnalyser() {
@@ -321,6 +340,8 @@ class AudioEngine {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.loop = true;
+    source.loopStart = this.loopEnabled ? this.loopStart : 0;
+    source.loopEnd = this.loopEnabled ? this.loopEnd : this.duration;
     source.connect(this.nodes.originalAnalyser);
     source.connect(this.worklet);
     return source;
@@ -350,6 +371,8 @@ class AudioEngine {
     await this.ensureContext(false);
     this.stop();
     this.originalBuffer = this.createBuffer(originalSamples);
+    this.loopStart = clamp(this.loopStart, 0, this.duration - 0.01);
+    this.loopEnd = clamp(this.loopEnd, this.loopStart + 0.01, this.duration);
     this.offset = 0;
   }
 
@@ -369,12 +392,47 @@ class AudioEngine {
       return;
     }
     await this.ensureContext();
-    const time = this.offset % this.duration;
+    const time = this.loopEnabled
+      ? clamp(this.offset, this.loopStart, this.loopEnd - 0.001)
+      : this.offset % this.duration;
     this.worklet.port.postMessage({ type: "reset" });
     this.originalSource = this.createLoopingSource(this.originalBuffer);
     this.originalSource.start(0, time);
     this.startedAt = this.context.currentTime;
     this.playing = true;
+  }
+
+  restartAt(time) {
+    if (!this.playing || !this.context || !this.originalBuffer) {
+      this.offset = time;
+      return;
+    }
+    this.stopSource(this.originalSource);
+    this.originalSource = this.createLoopingSource(this.originalBuffer);
+    this.originalSource.start(0, time);
+    this.offset = time;
+    this.startedAt = this.context.currentTime;
+  }
+
+  setLoop(enabled, start, end) {
+    const current = this.currentTime;
+    this.loopEnabled = enabled;
+    this.loopStart = clamp(start, 0, Math.max(0, this.duration - 0.01));
+    this.loopEnd = clamp(end, this.loopStart + 0.01, this.duration);
+
+    if (this.originalSource) {
+      this.originalSource.loopStart = enabled ? this.loopStart : 0;
+      this.originalSource.loopEnd = enabled ? this.loopEnd : this.duration;
+    }
+
+    if (enabled && (current < this.loopStart || current >= this.loopEnd)) {
+      this.restartAt(this.loopStart);
+      return;
+    }
+    this.offset = current;
+    if (this.context) {
+      this.startedAt = this.context.currentTime;
+    }
   }
 
   stop() {
@@ -712,8 +770,136 @@ class WaveformScope {
   }
 }
 
+class LoopRangeControl {
+  constructor(elements, onChange) {
+    this.stage = elements.stage;
+    this.overlay = elements.overlay;
+    this.selection = elements.selection;
+    this.startHandle = elements.start;
+    this.endHandle = elements.end;
+    this.onChange = onChange;
+    this.active = false;
+    this.start = 0.15;
+    this.end = 0.85;
+    this.duration = 1;
+    this.dragging = null;
+
+    this.bindHandle(this.startHandle, "start");
+    this.bindHandle(this.endHandle, "end");
+    this.render();
+  }
+
+  get minimumSpan() {
+    return clamp(0.5 / Math.max(this.duration, 0.5), 0.01, 0.12);
+  }
+
+  bindHandle(handle, side) {
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      this.dragging = side;
+      handle.classList.add("is-dragging");
+      handle.setPointerCapture(event.pointerId);
+      this.updateFromPointer(event, side);
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (this.dragging === side) {
+        this.updateFromPointer(event, side);
+      }
+    });
+    const finish = (event) => {
+      if (this.dragging !== side) {
+        return;
+      }
+      this.dragging = null;
+      handle.classList.remove("is-dragging");
+      if (handle.hasPointerCapture(event.pointerId)) {
+        handle.releasePointerCapture(event.pointerId);
+      }
+    };
+    handle.addEventListener("pointerup", finish);
+    handle.addEventListener("pointercancel", finish);
+    handle.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      const direction = event.key === "ArrowLeft" ? -1 : 1;
+      const step = event.shiftKey ? 0.01 : 0.0025;
+      this.setBoundary(side, (side === "start" ? this.start : this.end) + direction * step);
+    });
+  }
+
+  updateFromPointer(event, side) {
+    const rect = this.stage.getBoundingClientRect();
+    const value = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    this.setBoundary(side, value);
+  }
+
+  setBoundary(side, value) {
+    if (side === "start") {
+      this.start = clamp(value, 0, this.end - this.minimumSpan);
+    } else {
+      this.end = clamp(value, this.start + this.minimumSpan, 1);
+    }
+    this.render();
+    this.onChange(this.active, this.start, this.end);
+  }
+
+  setDuration(duration) {
+    this.duration = Math.max(duration, 0.5);
+    if (this.end - this.start < this.minimumSpan) {
+      this.end = clamp(this.start + this.minimumSpan, 0, 1);
+    }
+    this.render();
+  }
+
+  setActive(active) {
+    this.active = active;
+    this.overlay.classList.toggle("is-active", active);
+    this.render();
+    this.onChange(this.active, this.start, this.end);
+  }
+
+  render() {
+    const startPercent = this.start * 100;
+    const endPercent = this.end * 100;
+    this.startHandle.style.left = `${startPercent}%`;
+    this.endHandle.style.left = `${endPercent}%`;
+    this.selection.style.left = `${startPercent}%`;
+    this.selection.style.width = `${endPercent - startPercent}%`;
+    const startSeconds = this.start * this.duration;
+    const endSeconds = this.end * this.duration;
+    this.startHandle.setAttribute("aria-valuenow", startSeconds.toFixed(2));
+    this.startHandle.setAttribute("aria-valuemax", this.duration.toFixed(2));
+    this.startHandle.setAttribute(
+      "aria-valuetext",
+      `${startSeconds.toFixed(2)} seconds`,
+    );
+    this.endHandle.setAttribute("aria-valuenow", endSeconds.toFixed(2));
+    this.endHandle.setAttribute("aria-valuemax", this.duration.toFixed(2));
+    this.endHandle.setAttribute(
+      "aria-valuetext",
+      `${endSeconds.toFixed(2)} seconds`,
+    );
+  }
+}
+
 const engine = new AudioEngine(selectedParameters());
 const waveform = new WaveformScope(document.querySelector("#waveformCanvas"));
+const loopRange = new LoopRangeControl(
+  {
+    stage: els.waveformStage,
+    overlay: els.loopOverlay,
+    selection: els.loopSelection,
+    start: els.loopStart,
+    end: els.loopEnd,
+  },
+  (active, start, end) => {
+    state.loopStart = start;
+    state.loopEnd = end;
+    engine.setLoop(active, start * engine.duration, end * engine.duration);
+  },
+);
 const originalSpectrogram = new Spectrogram(
   document.querySelector("#originalSpectrogram"),
 );
@@ -729,6 +915,7 @@ function resetVisuals() {
   originalSpectrogram.setSource(DEMO_CONFIG.sampleRate, engine.duration);
   processedSpectrogram.setSource(DEMO_CONFIG.sampleRate, engine.duration);
   waveform.clear();
+  loopRange.setDuration(engine.duration);
   state.lastVisualTime = 0;
   els.time.textContent = "0.00s";
   els.meter.textContent = "L 0.0  H 0.0";
@@ -809,6 +996,11 @@ async function loadAudio(arrayBuffer, label) {
   state.sourceData = decoded;
   state.sourceLabel = label;
   await engine.setSource(decoded);
+  engine.setLoop(
+    state.loopActive,
+    state.loopStart * engine.duration,
+    state.loopEnd * engine.duration,
+  );
   resetVisuals();
   engine.setParameters(selectedParameters());
   els.power.disabled = false;
@@ -857,6 +1049,19 @@ els.bypass.addEventListener("click", () => {
     ? "Bypassed waveform"
     : "Processed waveform";
   waveform.clear();
+});
+
+els.loop.addEventListener("click", () => {
+  state.loopActive = !state.loopActive;
+  loopRange.setActive(state.loopActive);
+  els.loop.classList.toggle("is-active", state.loopActive);
+  els.loop.setAttribute("aria-pressed", String(state.loopActive));
+  setStatus(
+    `${state.loopActive ? "loop active" : "loop inactive"} · ${(
+      state.loopStart * engine.duration
+    ).toFixed(1)}–${(state.loopEnd * engine.duration).toFixed(1)}s`,
+    1,
+  );
 });
 
 els.file.addEventListener("change", () => {

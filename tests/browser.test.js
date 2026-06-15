@@ -26,7 +26,7 @@ async function waitForServer(url) {
 }
 
 test(
-  "the live demo streams blocks, updates instantly, uploads, and bypasses",
+  "the live demo streams, loops, updates, uploads, and bypasses",
   { timeout: 120000 },
   async () => {
     const server = spawn(
@@ -85,6 +85,42 @@ test(
         await page.locator("#statusText").textContent(),
         /processing/i,
       );
+
+      const stage = await page.locator("#waveformStage").boundingBox();
+      assert.ok(stage);
+      const startHandle = page.locator("#loopStartHandle");
+      const endHandle = page.locator("#loopEndHandle");
+      assert.doesNotMatch(
+        await page.locator("#loopOverlay").getAttribute("class"),
+        /is-active/,
+      );
+      await startHandle.hover();
+      await page.mouse.down();
+      await page.mouse.move(stage.x + stage.width * 0.25, stage.y + stage.height / 2);
+      await page.mouse.up();
+      await endHandle.hover();
+      await page.mouse.down();
+      await page.mouse.move(stage.x + stage.width * 0.3, stage.y + stage.height / 2);
+      await page.mouse.up();
+      assert.match(await startHandle.getAttribute("style"), /25/);
+      assert.match(await endHandle.getAttribute("style"), /30/);
+
+      await page.locator("#loopButton").click();
+      assert.equal(
+        await page.locator("#loopButton").getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.match(
+        await page.locator("#loopOverlay").getAttribute("class"),
+        /is-active/,
+      );
+      const loopStart = Number(await startHandle.getAttribute("aria-valuenow"));
+      const loopEnd = Number(await endHandle.getAttribute("aria-valuenow"));
+      await page.waitForTimeout(2600);
+      const loopedTime = Number(
+        (await page.locator("#timeReadout").textContent()).replace("s", ""),
+      );
+      assert.ok(loopedTime >= loopStart && loopedTime < loopEnd);
 
       await page.locator("#uploadInput").setInputFiles(
         path.join(root, "site/assets/samples/dolphin.m4a"),

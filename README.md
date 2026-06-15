@@ -14,6 +14,7 @@ the file to a server.
 - detector-guided reconstruction and output limiting
 - parameter changes applied to the next DSP block without re-rendering
 - synchronized original/processed playback with a -20 dB bypass monitor
+- draggable loop start/end markers with live range updates
 - original and processed spectrograms plus a live waveform
 - the same four LOW/MED/HIGH parameters as the static demo
 

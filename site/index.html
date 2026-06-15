@@ -35,9 +35,48 @@
         <article class="visual-panel waveform-panel">
           <div class="panel-head">
             <span id="waveformTitle">Processed waveform</span>
-            <span id="timeReadout">0.00s</span>
+            <div class="waveform-actions">
+              <button
+                id="loopButton"
+                class="loop-toggle"
+                type="button"
+                aria-pressed="false"
+              >
+                Loop
+              </button>
+              <span id="timeReadout">0.00s</span>
+            </div>
           </div>
-          <canvas id="waveformCanvas"></canvas>
+          <div id="waveformStage" class="waveform-stage">
+            <canvas id="waveformCanvas"></canvas>
+            <div id="loopOverlay" class="loop-overlay" aria-label="Loop range">
+              <div id="loopSelection" class="loop-selection"></div>
+              <button
+                id="loopStartHandle"
+                class="loop-handle loop-handle-start"
+                type="button"
+                role="slider"
+                aria-label="Loop start"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="15"
+              >
+                <span></span>
+              </button>
+              <button
+                id="loopEndHandle"
+                class="loop-handle loop-handle-end"
+                type="button"
+                role="slider"
+                aria-label="Loop end"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="85"
+              >
+                <span></span>
+              </button>
+            </div>
+          </div>
         </article>
 
         <section class="control-dock">

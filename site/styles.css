@@ -264,6 +264,21 @@ button.is-live:hover {
   min-height: 0;
 }
 
+.waveform-stage {
+  position: relative;
+  width: 100%;
+  height: calc(100% - 28px);
+  overflow: hidden;
+  border-radius: 8px;
+  background: #000000;
+  touch-action: none;
+}
+
+.waveform-stage canvas {
+  width: 100%;
+  height: 100%;
+}
+
 .panel-head {
   height: 28px;
   display: flex;
@@ -278,6 +293,142 @@ button.is-live:hover {
 .panel-head span:first-child {
   color: var(--ink);
   font-weight: 600;
+}
+
+.waveform-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.loop-toggle {
+  min-width: 0;
+  width: auto;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(18px) saturate(140%);
+}
+
+.loop-toggle:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.1);
+  transform: none;
+}
+
+.loop-toggle.is-active {
+  color: #ffffff;
+  border-color: rgba(255, 69, 58, 0.7);
+  background: rgba(255, 69, 58, 0.78);
+  box-shadow: 0 0 18px rgba(255, 69, 58, 0.16);
+}
+
+.loop-overlay {
+  --loop-color: rgba(152, 152, 157, 0.6);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.loop-overlay.is-active {
+  --loop-color: #ff453a;
+}
+
+.loop-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 15%;
+  width: 70%;
+  background: rgba(142, 142, 147, 0.035);
+  border-top: 1px solid rgba(142, 142, 147, 0.08);
+  border-bottom: 1px solid rgba(142, 142, 147, 0.08);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.loop-overlay.is-active .loop-selection {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 69, 58, 0.025),
+    rgba(255, 69, 58, 0.09),
+    rgba(255, 69, 58, 0.025)
+  );
+  border-color: rgba(255, 69, 58, 0.16);
+}
+
+.loop-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 15%;
+  width: 28px;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: auto;
+  cursor: ew-resize;
+  transform: translateX(-50%);
+  touch-action: none;
+}
+
+.loop-handle:hover,
+.loop-handle:active {
+  background: transparent;
+  transform: translateX(-50%);
+}
+
+.loop-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--loop-color);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.32);
+  transform: translateX(-50%);
+  transition: width 120ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.loop-handle span {
+  position: absolute;
+  top: 7px;
+  left: 50%;
+  width: 10px;
+  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 5px;
+  background: var(--loop-color);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+  transform: translateX(-50%);
+  transition: background 180ms ease, transform 120ms ease;
+}
+
+.loop-handle-end span {
+  top: auto;
+  bottom: 7px;
+}
+
+.loop-handle:hover::before,
+.loop-handle.is-dragging::before {
+  width: 3px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 0 14px color-mix(in srgb, var(--loop-color) 55%, transparent);
+}
+
+.loop-handle:hover span,
+.loop-handle.is-dragging span {
+  transform: translateX(-50%) scale(1.08);
 }
 
 canvas {
