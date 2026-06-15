@@ -1,0 +1,16 @@
+{
+  "name": "reef-recon-live-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:wasm",
+    "build:wasm": "asc assembly/dsp-core.ts -o site/dsp-core.wasm --runtime stub --exportRuntime --optimize --initialMemory 2",
+    "serve": "python3 -m http.server 4173 --directory site",
+    "test": "npm run build && node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "assemblyscript": "0.27.31",
+    "playwright-core": "1.52.0"
+  }
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Browser-only Reef Recon DSP demonstration with local audio uploads."
+    />
+    <title>Reef Recon Live DSP Demo</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="spectrogram-stack" aria-label="Realtime spectrograms">
+        <article class="visual-panel">
+          <div class="panel-head">
+            <span>Original</span>
+            <span id="sourceReadout">44 kHz</span>
+          </div>
+          <canvas id="originalSpectrogram"></canvas>
+        </article>
+
+        <article class="visual-panel">
+          <div class="panel-head">
+            <span>Processed</span>
+            <span id="meterReadout">L 0.0 H 0.0</span>
+          </div>
+          <canvas id="processedSpectrogram"></canvas>
+        </article>
+      </section>
+
+      <aside class="side-rack" aria-label="Monitor and controls">
+        <article class="visual-panel waveform-panel">
+          <div class="panel-head">
+            <span id="waveformTitle">Processed waveform</span>
+            <span id="timeReadout">0.00s</span>
+          </div>
+          <canvas id="waveformCanvas"></canvas>
+        </article>
+
+        <section class="control-dock">
+          <div class="transport">
+            <p id="statusText" class="status-line">loading WebAssembly DSP</p>
+            <select id="fileSelect" aria-label="Example audio file"></select>
+            <label class="upload-button" for="uploadInput">
+              <span>Upload audio</span>
+              <input id="uploadInput" type="file" accept="audio/*,.wav,.flac,.mp3,.m4a,.aac,.ogg" />
+            </label>
+            <div class="progress-track" aria-hidden="true">
+              <span id="progressBar"></span>
+            </div>
+            <div class="transport-buttons">
+              <button
+                id="bypassButton"
+                class="bypass-button"
+                type="button"
+                aria-pressed="false"
+              >
+                Processed
+              </button>
+              <button id="powerButton" type="button" disabled>Play</button>
+            </div>
+          </div>
+
+          <section
+            class="control-surface"
+            id="controlSurface"
+            aria-label="Parameters"
+          ></section>
+
+          <p class="privacy-note">
+            Processing stays in this browser. Uploaded files are not sent anywhere.
+          </p>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
