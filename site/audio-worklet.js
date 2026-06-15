@@ -461,6 +461,7 @@ class ReefReconProcessor extends AudioWorkletProcessor {
     this.highSidechainGain = 1;
     this.agcGain = 1;
     this.limiterGain = 1;
+    this.referenceGain = this.suppressedGain;
     this.detectorInitialized = false;
     this.blockCounter = 0;
     this.reset();
@@ -499,6 +500,7 @@ class ReefReconProcessor extends AudioWorkletProcessor {
     this.highSidechainGain = 1;
     this.agcGain = 1;
     this.limiterGain = 1;
+    this.referenceGain = this.suppressedGain;
     this.detectorInitialized = false;
     this.blockCounter = 0;
   }
@@ -534,6 +536,17 @@ class ReefReconProcessor extends AudioWorkletProcessor {
         (this.agcGain + (nextAgcGain - this.agcGain) * mix);
     }
     this.agcGain = nextAgcGain;
+    const inputRms = Math.sqrt(meanSquare(input, count) + EPSILON);
+    const baselineRms =
+      Math.sqrt(meanSquare(this.agcBlock, count) + EPSILON) *
+      this.suppressedGain;
+    if (inputRms > dbToGain(-80)) {
+      const referenceTarget = clamp(baselineRms / inputRms, 0.01, 1.5);
+      const referenceAlpha = alphaForMs(750, this.frameRate);
+      this.referenceGain =
+        referenceAlpha * this.referenceGain +
+        (1 - referenceAlpha) * referenceTarget;
+    }
 
     const splitOutput = this.kernel.processBank(
       this.agcBlock,
@@ -720,6 +733,7 @@ class ReefReconProcessor extends AudioWorkletProcessor {
         highGainDb: gainToDb(effectiveHigh),
         transient: transientFlag,
         harmonic: structured.flag,
+        referenceGain: this.referenceGain,
       });
     }
   }

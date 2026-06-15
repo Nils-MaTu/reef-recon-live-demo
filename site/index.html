@@ -19,23 +19,34 @@
             <span>Original</span>
             <span id="sourceReadout">44 kHz</span>
           </div>
-          <canvas id="originalSpectrogram"></canvas>
+          <div id="originalSpectrogramStage" class="spectrogram-stage">
+            <canvas id="originalSpectrogram"></canvas>
+            <div class="loop-overlay spectrogram-loop-overlay" aria-label="Loop range">
+              <div class="loop-selection"></div>
+              <button
+                class="loop-handle loop-handle-start"
+                type="button"
+                role="slider"
+                aria-label="Loop start"
+              >
+                <span></span>
+              </button>
+              <button
+                class="loop-handle loop-handle-end"
+                type="button"
+                role="slider"
+                aria-label="Loop end"
+              >
+                <span></span>
+              </button>
+            </div>
+          </div>
         </article>
 
         <article class="visual-panel">
           <div class="panel-head">
             <span>Processed</span>
-            <span id="meterReadout">L 0.0 H 0.0</span>
-          </div>
-          <canvas id="processedSpectrogram"></canvas>
-        </article>
-      </section>
-
-      <aside class="side-rack" aria-label="Monitor and controls">
-        <article class="visual-panel waveform-panel">
-          <div class="panel-head">
-            <span id="waveformTitle">Processed waveform</span>
-            <div class="waveform-actions">
+            <div class="spectrogram-actions">
               <button
                 id="loopButton"
                 class="loop-toggle"
@@ -44,22 +55,19 @@
               >
                 Loop
               </button>
-              <span id="timeReadout">0.00s</span>
+              <span id="meterReadout">L 0.0 H 0.0</span>
             </div>
           </div>
-          <div id="waveformStage" class="waveform-stage">
-            <canvas id="waveformCanvas"></canvas>
-            <div id="loopOverlay" class="loop-overlay" aria-label="Loop range">
-              <div id="loopSelection" class="loop-selection"></div>
+          <div id="processedSpectrogramStage" class="spectrogram-stage">
+            <canvas id="processedSpectrogram"></canvas>
+            <div class="loop-overlay spectrogram-loop-overlay" aria-label="Loop range">
+              <div class="loop-selection"></div>
               <button
                 id="loopStartHandle"
                 class="loop-handle loop-handle-start"
                 type="button"
                 role="slider"
                 aria-label="Loop start"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow="15"
               >
                 <span></span>
               </button>
@@ -69,13 +77,22 @@
                 type="button"
                 role="slider"
                 aria-label="Loop end"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow="85"
               >
                 <span></span>
               </button>
             </div>
+          </div>
+        </article>
+      </section>
+
+      <aside class="side-rack" aria-label="Monitor and controls">
+        <article class="visual-panel waveform-panel">
+          <div class="panel-head">
+            <span id="waveformTitle">Processed waveform</span>
+            <span id="timeReadout">0.00s</span>
+          </div>
+          <div class="waveform-stage">
+            <canvas id="waveformCanvas"></canvas>
           </div>
         </article>
 

@@ -264,7 +264,8 @@ button.is-live:hover {
   min-height: 0;
 }
 
-.waveform-stage {
+.waveform-stage,
+.spectrogram-stage {
   position: relative;
   width: 100%;
   height: calc(100% - 28px);
@@ -274,7 +275,8 @@ button.is-live:hover {
   touch-action: none;
 }
 
-.waveform-stage canvas {
+.waveform-stage canvas,
+.spectrogram-stage canvas {
   width: 100%;
   height: 100%;
 }
@@ -295,7 +297,7 @@ button.is-live:hover {
   font-weight: 600;
 }
 
-.waveform-actions {
+.spectrogram-actions {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -335,6 +337,13 @@ button.is-live:hover {
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+
+.spectrogram-loop-overlay {
+  left: 48px;
+  right: 10px;
+  top: 8px;
+  bottom: 28px;
 }
 
 .loop-overlay.is-active {

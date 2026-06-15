@@ -86,12 +86,16 @@ test(
         /processing/i,
       );
 
-      const stage = await page.locator("#waveformStage").boundingBox();
+      const stage = await page
+        .locator("#processedSpectrogramStage .loop-overlay")
+        .boundingBox();
       assert.ok(stage);
       const startHandle = page.locator("#loopStartHandle");
       const endHandle = page.locator("#loopEndHandle");
       assert.doesNotMatch(
-        await page.locator("#loopOverlay").getAttribute("class"),
+        await page
+          .locator("#processedSpectrogramStage .loop-overlay")
+          .getAttribute("class"),
         /is-active/,
       );
       await startHandle.hover();
@@ -111,7 +115,15 @@ test(
         "true",
       );
       assert.match(
-        await page.locator("#loopOverlay").getAttribute("class"),
+        await page
+          .locator("#processedSpectrogramStage .loop-overlay")
+          .getAttribute("class"),
+        /is-active/,
+      );
+      assert.match(
+        await page
+          .locator("#originalSpectrogramStage .loop-overlay")
+          .getAttribute("class"),
         /is-active/,
       );
       const loopStart = Number(await startHandle.getAttribute("aria-valuenow"));
@@ -149,12 +161,17 @@ test(
       await page.locator("#bypassButton").click();
       assert.equal(
         await page.locator("#bypassButton").textContent(),
-        "Bypassed -20 dB",
+        "Level matched",
       );
       assert.equal(
         await page.locator("#bypassButton").getAttribute("aria-pressed"),
         "true",
       );
+      const referenceGainDb = Number(
+        await page.locator("#bypassButton").getAttribute("data-reference-gain-db"),
+      );
+      assert.ok(Number.isFinite(referenceGainDb));
+      assert.ok(referenceGainDb > -40 && referenceGainDb < 4);
 
       await mkdir(path.join(root, "test-results"), { recursive: true });
       await page.screenshot({

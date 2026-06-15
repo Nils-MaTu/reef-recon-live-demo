@@ -11,11 +11,6 @@ const els = {
   file: document.querySelector("#fileSelect"),
   upload: document.querySelector("#uploadInput"),
   loop: document.querySelector("#loopButton"),
-  loopOverlay: document.querySelector("#loopOverlay"),
-  loopSelection: document.querySelector("#loopSelection"),
-  loopStart: document.querySelector("#loopStartHandle"),
-  loopEnd: document.querySelector("#loopEndHandle"),
-  waveformStage: document.querySelector("#waveformStage"),
   controls: document.querySelector("#controlSurface"),
   time: document.querySelector("#timeReadout"),
   waveformTitle: document.querySelector("#waveformTitle"),
@@ -193,6 +188,7 @@ class AudioEngine {
     this.parameterVersion = 0;
     this.playing = false;
     this.bypass = false;
+    this.dryReferenceGain = dbToGain(DEMO_CONFIG.suppressedGainDb);
     this.loopEnabled = false;
     this.loopStart = 0;
     this.loopEnd = 1;
@@ -288,7 +284,7 @@ class AudioEngine {
       dryDelay.delayTime.value =
         DEMO_CONFIG.blockSize / DEMO_CONFIG.sampleRate;
       originalGain.gain.value = this.bypass
-        ? dbToGain(DEMO_CONFIG.suppressedGainDb)
+        ? this.dryReferenceGain
         : 0;
       processedGain.gain.value = this.bypass ? 0 : 1;
       outputGain.gain.value = dbToGain(DEMO_CONFIG.outputGainDb);
@@ -462,10 +458,24 @@ class AudioEngine {
     }
     this.holdAndRamp(
       this.nodes.originalGain.gain,
-      bypassed ? dbToGain(DEMO_CONFIG.suppressedGainDb) : 0,
+      bypassed ? this.dryReferenceGain : 0,
       0.08,
     );
     this.holdAndRamp(this.nodes.processedGain.gain, bypassed ? 0 : 1, 0.08);
+  }
+
+  setReferenceGain(gain) {
+    if (!Number.isFinite(gain)) {
+      return;
+    }
+    this.dryReferenceGain = clamp(gain, 0.01, 1.5);
+    if (this.bypass && this.context) {
+      this.holdAndRamp(
+        this.nodes.originalGain.gain,
+        this.dryReferenceGain,
+        0.12,
+      );
+    }
   }
 }
 
@@ -771,12 +781,8 @@ class WaveformScope {
 }
 
 class LoopRangeControl {
-  constructor(elements, onChange) {
-    this.stage = elements.stage;
-    this.overlay = elements.overlay;
-    this.selection = elements.selection;
-    this.startHandle = elements.start;
-    this.endHandle = elements.end;
+  constructor(surfaces, onChange) {
+    this.surfaces = surfaces;
     this.onChange = onChange;
     this.active = false;
     this.start = 0.15;
@@ -784,8 +790,10 @@ class LoopRangeControl {
     this.duration = 1;
     this.dragging = null;
 
-    this.bindHandle(this.startHandle, "start");
-    this.bindHandle(this.endHandle, "end");
+    for (const surface of surfaces) {
+      this.bindHandle(surface, surface.start, "start");
+      this.bindHandle(surface, surface.end, "end");
+    }
     this.render();
   }
 
@@ -793,17 +801,17 @@ class LoopRangeControl {
     return clamp(0.5 / Math.max(this.duration, 0.5), 0.01, 0.12);
   }
 
-  bindHandle(handle, side) {
+  bindHandle(surface, handle, side) {
     handle.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       this.dragging = side;
       handle.classList.add("is-dragging");
       handle.setPointerCapture(event.pointerId);
-      this.updateFromPointer(event, side);
+      this.updateFromPointer(event, surface, side);
     });
     handle.addEventListener("pointermove", (event) => {
       if (this.dragging === side) {
-        this.updateFromPointer(event, side);
+        this.updateFromPointer(event, surface, side);
       }
     });
     const finish = (event) => {
@@ -829,8 +837,8 @@ class LoopRangeControl {
     });
   }
 
-  updateFromPointer(event, side) {
-    const rect = this.stage.getBoundingClientRect();
+  updateFromPointer(event, surface, side) {
+    const rect = surface.overlay.getBoundingClientRect();
     const value = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     this.setBoundary(side, value);
   }
@@ -855,7 +863,9 @@ class LoopRangeControl {
 
   setActive(active) {
     this.active = active;
-    this.overlay.classList.toggle("is-active", active);
+    for (const surface of this.surfaces) {
+      surface.overlay.classList.toggle("is-active", active);
+    }
     this.render();
     this.onChange(this.active, this.start, this.end);
   }
@@ -863,37 +873,42 @@ class LoopRangeControl {
   render() {
     const startPercent = this.start * 100;
     const endPercent = this.end * 100;
-    this.startHandle.style.left = `${startPercent}%`;
-    this.endHandle.style.left = `${endPercent}%`;
-    this.selection.style.left = `${startPercent}%`;
-    this.selection.style.width = `${endPercent - startPercent}%`;
     const startSeconds = this.start * this.duration;
     const endSeconds = this.end * this.duration;
-    this.startHandle.setAttribute("aria-valuenow", startSeconds.toFixed(2));
-    this.startHandle.setAttribute("aria-valuemax", this.duration.toFixed(2));
-    this.startHandle.setAttribute(
-      "aria-valuetext",
-      `${startSeconds.toFixed(2)} seconds`,
-    );
-    this.endHandle.setAttribute("aria-valuenow", endSeconds.toFixed(2));
-    this.endHandle.setAttribute("aria-valuemax", this.duration.toFixed(2));
-    this.endHandle.setAttribute(
-      "aria-valuetext",
-      `${endSeconds.toFixed(2)} seconds`,
-    );
+    for (const surface of this.surfaces) {
+      surface.start.style.left = `${startPercent}%`;
+      surface.end.style.left = `${endPercent}%`;
+      surface.selection.style.left = `${startPercent}%`;
+      surface.selection.style.width = `${endPercent - startPercent}%`;
+      surface.start.setAttribute("aria-valuenow", startSeconds.toFixed(2));
+      surface.start.setAttribute("aria-valuemax", this.duration.toFixed(2));
+      surface.start.setAttribute(
+        "aria-valuetext",
+        `${startSeconds.toFixed(2)} seconds`,
+      );
+      surface.end.setAttribute("aria-valuenow", endSeconds.toFixed(2));
+      surface.end.setAttribute("aria-valuemax", this.duration.toFixed(2));
+      surface.end.setAttribute(
+        "aria-valuetext",
+        `${endSeconds.toFixed(2)} seconds`,
+      );
+    }
   }
 }
 
 const engine = new AudioEngine(selectedParameters());
 const waveform = new WaveformScope(document.querySelector("#waveformCanvas"));
 const loopRange = new LoopRangeControl(
-  {
-    stage: els.waveformStage,
-    overlay: els.loopOverlay,
-    selection: els.loopSelection,
-    start: els.loopStart,
-    end: els.loopEnd,
-  },
+  Array.from(document.querySelectorAll(".spectrogram-stage")).map((stage) => {
+    const overlay = stage.querySelector(".loop-overlay");
+    return {
+      stage,
+      overlay,
+      selection: overlay.querySelector(".loop-selection"),
+      start: overlay.querySelector(".loop-handle-start"),
+      end: overlay.querySelector(".loop-handle-end"),
+    };
+  }),
   (active, start, end) => {
     state.loopStart = start;
     state.loopEnd = end;
@@ -1044,7 +1059,7 @@ els.bypass.addEventListener("click", () => {
   engine.setBypass(state.bypass);
   els.bypass.classList.toggle("is-bypassed", state.bypass);
   els.bypass.setAttribute("aria-pressed", String(state.bypass));
-  els.bypass.textContent = state.bypass ? "Bypassed -20 dB" : "Processed";
+  els.bypass.textContent = state.bypass ? "Level matched" : "Processed";
   els.waveformTitle.textContent = state.bypass
     ? "Bypassed waveform"
     : "Processed waveform";
@@ -1103,6 +1118,10 @@ window.addEventListener("resize", resetVisuals);
 
 engine.onMeter = (meter) => {
   state.meter = meter;
+  engine.setReferenceGain(meter.referenceGain);
+  const referenceDb = 20 * Math.log10(Math.max(meter.referenceGain, 1e-8));
+  els.bypass.dataset.referenceGainDb = referenceDb.toFixed(1);
+  els.bypass.title = `Dry reference gain: ${referenceDb.toFixed(1)} dB`;
 };
 
 engine.onParametersApplied = () => {
