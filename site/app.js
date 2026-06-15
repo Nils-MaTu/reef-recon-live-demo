@@ -147,10 +147,9 @@ class SwitchControl {
       const label = document.createElement("label");
       label.htmlFor = id;
       label.textContent = optionLevel.toUpperCase();
-      label.title = `${spec.label}: ${formatValue(
-        spec.levels[optionLevel],
-        spec.unit,
-      )}`;
+      label.title = spec.showValue === false
+        ? spec.label
+        : `${spec.label}: ${formatValue(spec.levels[optionLevel], spec.unit)}`;
 
       input.addEventListener("change", () => {
         if (!input.checked) {
@@ -163,13 +162,20 @@ class SwitchControl {
       this.group.append(input, label);
     }
 
-    this.readout = document.createElement("div");
-    this.readout.className = "readout";
-    this.updateReadout();
-    this.root.append(this.legend, this.group, this.readout);
+    if (spec.showValue !== false) {
+      this.readout = document.createElement("div");
+      this.readout.className = "readout";
+      this.updateReadout();
+      this.root.append(this.legend, this.group, this.readout);
+    } else {
+      this.root.append(this.legend, this.group);
+    }
   }
 
   updateReadout() {
+    if (!this.readout) {
+      return;
+    }
     this.readout.textContent = formatValue(
       this.spec.levels[this.level],
       this.spec.unit,

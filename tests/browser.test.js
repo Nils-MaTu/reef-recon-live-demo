@@ -76,8 +76,12 @@ test(
           .locator(".switch-control")
           .filter({ hasText: "Transient Detection Sensitivity" })
           .locator(".readout")
-          .textContent(),
-        "3.0 dB",
+          .count(),
+        0,
+      );
+      assert.equal(
+        await page.locator("#transient_threshold_db-high").isChecked(),
+        true,
       );
       await page.locator('label[for="harmonic_threshold_db-low"]').click();
       assert.equal(
@@ -85,8 +89,12 @@ test(
           .locator(".switch-control")
           .filter({ hasText: "Harmonic Detection Sensitivity" })
           .locator(".readout")
-          .textContent(),
-        "14.0 dB",
+          .count(),
+        0,
+      );
+      assert.equal(
+        await page.locator("#harmonic_threshold_db-low").isChecked(),
+        true,
       );
 
       await page.locator("#powerButton").click();
